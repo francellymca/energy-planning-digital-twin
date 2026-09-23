@@ -1,0 +1,21 @@
+{
+    "titulo": "DicionarioDados_Carga_Energia_Diaria",
+    "dicionario_simplificado": [
+        {
+            "descricao": "Código do Subsistema",
+            "codigo": "id_subsistema"
+        },
+        {
+            "descricao": "Nome do Subsistema",
+            "codigo": "nom_subsistema"
+        },
+        {
+            "descricao": "Data de referência",
+            "codigo": "din_instante"
+        },
+        {
+            "descricao": "Valor da Carga de Energia, em MWmed",
+            "codigo": "val_cargaenergiamwmed"
+        }
+    ]
+}
