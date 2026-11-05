@@ -1,0 +1,14 @@
+tipo,particao,item,registros_totais,registros_disponiveis,registros_ausentes,cobertura_pct
+amostra,treino,amostra_univariada_completa,576,576,0,100.0
+amostra,treino,amostra_energia_clima_completa,576,570,6,98.958
+amostra,treino,amostra_socioeconomica_completa,576,570,6,98.958
+amostra,teste,amostra_univariada_completa,144,144,0,100.0
+amostra,teste,amostra_energia_clima_completa,144,144,0,100.0
+amostra,teste,amostra_socioeconomica_completa,144,144,0,100.0
+variavel,TOTAL,populacao_ultimo_disponivel,720,720,0,100.0
+variavel,TOTAL,populacao_defasagem_anos,720,720,0,100.0
+variavel,TOTAL,pib_corrente_ultimo_disponivel,720,720,0,100.0
+variavel,TOTAL,pib_corrente_defasagem_anos,720,720,0,100.0
+variavel,TOTAL,carga_mwmed_media_mes_lag_1,720,714,6,99.167
+variavel,TOTAL,temperatura_media_c_lag_1,720,720,0,100.0
+variavel,TOTAL,precipitacao_mediana_mm_lag_1,720,720,0,100.0

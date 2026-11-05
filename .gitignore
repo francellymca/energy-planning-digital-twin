@@ -1,0 +1,8 @@
+# Dados brutos do INMET
+data/inmet/dados_brutos/arquivos_zip/
+data/inmet/dados_brutos/estacoes_automaticas/
+
+# Ambientes virtuais e arquivos temporários do Python
+.venv/
+__pycache__/
+*.py[cod]
