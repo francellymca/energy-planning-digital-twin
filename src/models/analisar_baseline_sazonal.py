@@ -19,13 +19,13 @@ UFS_ORDEM = ["BA", "MG", "PR", "RJ", "RS", "SP"]
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Gera figuras e análise dos erros do baseline sazonal."
+        description="Gera figuras e análise dos erros da linha de base sazonal."
     )
     parser.add_argument(
         "--predictions-file",
         type=Path,
         required=True,
-        help="CSV de previsões produzido pelo baseline sazonal.",
+        help="CSV de previsões produzido pela linha de base sazonal.",
     )
     parser.add_argument(
         "--figures-dir",
@@ -86,83 +86,123 @@ def millions_formatter(value: float, _: int) -> str:
 
 
 def plot_observed_vs_predicted(data: pd.DataFrame, output_path: Path) -> None:
-    fig, axes = plt.subplots(3, 2, figsize=(13, 11), sharex=True)
+    fig, axes = plt.subplots(3, 2, figsize=(15, 13), sharex=True)
     axes = axes.flatten()
 
     for axis, uf in zip(axes, UFS_ORDEM):
-        state = data.loc[data["uf"] == uf]
+        state = (
+            data.loc[data["uf"].eq(uf)]
+            .sort_values("mes")
+        )
+
         axis.plot(
             state["mes"],
             state["consumo_mwh"],
-            color="#1f4e79",
-            linewidth=2.0,
+            color="#184E77",
+            linewidth=2.2,
             marker="o",
-            markersize=3,
+            markersize=3.5,
             label="Observado",
         )
+
         axis.plot(
             state["mes"],
             state["previsao_consumo_mwh"],
-            color="#d97706",
+            color="#E07A00",
             linewidth=1.8,
             linestyle="--",
-            marker="s",
-            markersize=2.8,
-            label="Baseline sazonal",
+            label="Linha de base sazonal",
         )
 
         if uf == "RS":
             axis.axvspan(
                 pd.Timestamp("2024-04-01"),
-                pd.Timestamp("2024-06-01"),
-                color="#b91c1c",
-                alpha=0.12,
+                pd.Timestamp("2024-05-31"),
+                color="#D1495B",
+                alpha=0.14,
                 label="Evento extremo (RS)",
             )
 
-        axis.set_title(uf, fontsize=11, fontweight="bold")
-        axis.grid(axis="y", alpha=0.25)
-        axis.yaxis.set_major_formatter(FuncFormatter(millions_formatter))
-        axis.xaxis.set_major_locator(mdates.MonthLocator(interval=4))
-        axis.xaxis.set_major_formatter(mdates.DateFormatter("%m/%Y"))
+        axis.set_title(
+            uf,
+            fontsize=13,
+            fontweight="bold",
+        )
 
-    for axis in axes:
-        axis.tick_params(axis="x", rotation=45, labelsize=8)
+        axis.grid(alpha=0.25)
+
+        axis.yaxis.set_major_formatter(
+            FuncFormatter(millions_formatter)
+        )
+
+        axis.xaxis.set_major_locator(
+            mdates.MonthLocator(interval=3)
+        )
+
+        axis.xaxis.set_major_formatter(
+            mdates.DateFormatter("%Y-%m")
+        )
+
+        axis.tick_params(
+            axis="x",
+            rotation=35,
+            labelsize=9,
+        )
+
+        axis.tick_params(
+            axis="y",
+            labelsize=10,
+        )
 
     fig.suptitle(
-        "Consumo mensal observado e previsto pelo baseline sazonal",
-        fontsize=15,
+        "Consumo observado e previsto pela linha de base sazonal",
+        fontsize=17,
         fontweight="bold",
-        y=0.985,
+        y=0.995,
     )
-    fig.supxlabel("Mês", fontsize=11)
-    fig.supylabel("Consumo de energia elétrica (milhões de MWh)", fontsize=11)
+
+    fig.supxlabel(
+        "Mês",
+        fontsize=13,
+        y=0.050,
+    )
+
+    fig.supylabel(
+        "Consumo de energia elétrica (milhões de MWh)",
+        fontsize=13,
+        x=0.015,
+    )
 
     handles, labels = axes[0].get_legend_handles_labels()
     rs_handles, rs_labels = axes[4].get_legend_handles_labels()
-    if "Evento extremo (RS)" in rs_labels:
-        index = rs_labels.index("Evento extremo (RS)")
-        handles.append(rs_handles[index])
-        labels.append(rs_labels[index])
+
+    for handle, label in zip(rs_handles, rs_labels):
+        if label not in labels:
+            handles.append(handle)
+            labels.append(label)
+
     fig.legend(
-        handles,
-        labels,
+        handles=handles,
+        labels=labels,
         loc="lower center",
         ncol=3,
         frameon=False,
-        bbox_to_anchor=(0.5, 0.01),
+        fontsize=13,
+        bbox_to_anchor=(0.5, 0.008),
     )
-    fig.text(
-        0.99,
-        0.002,
-        "Fonte: elaboração própria a partir de dados da EPE.",
-        ha="right",
-        va="bottom",
-        fontsize=8,
-        color="#4b5563",
+
+    fig.tight_layout(
+        rect=(0.035, 0.09, 1.0, 0.96),
+        h_pad=1.2,
+        w_pad=1.0,
     )
-    fig.tight_layout(rect=(0.035, 0.06, 1, 0.96))
-    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+
+    fig.savefig(
+        output_path,
+        dpi=300,
+        bbox_inches="tight",
+    )
+
     plt.close(fig)
 
 
@@ -180,7 +220,7 @@ def plot_mape(data: pd.DataFrame, output_path: Path) -> pd.DataFrame:
     bars = axis.bar(
         metrics["uf"].astype(str),
         metrics["mape_pct"],
-        color="#3b82a0",
+        color="#E07A00",
         width=0.68,
     )
     axis.axhline(
@@ -192,7 +232,7 @@ def plot_mape(data: pd.DataFrame, output_path: Path) -> pd.DataFrame:
     )
     axis.bar_label(bars, fmt="%.2f%%", padding=4, fontsize=9)
     axis.set_title(
-        "Erro percentual do baseline sazonal por estado",
+        "Erro percentual da linha de base sazonal por estado",
         fontsize=14,
         fontweight="bold",
     )

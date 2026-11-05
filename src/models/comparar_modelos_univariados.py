@@ -1,0 +1,347 @@
+"""Compara linha de base sazonal, SARIMA e Prophet no teste 2024-2025."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+
+UF_ORDER = ["BA", "MG", "PR", "RJ", "RS", "SP"]
+OBSERVED = "observado_mwh"
+MODEL_COLUMNS = {
+    "Linha de base sazonal": "previsto_baseline_mwh",
+    "SARIMA": "previsto_sarima_mwh",
+    "Prophet": "previsto_prophet_mwh",
+}
+COLORS = {
+    "Observado": "#184E77",
+    "Linha de base sazonal": "#E07A00",
+    "SARIMA": "#2A9D8F",
+    "Prophet": "#7B2CBF",
+}
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--baseline-file",
+        type=Path,
+        default=Path(
+            "data/processed/modelagem/baseline_sazonal_previsoes_2024_2025.csv"
+        ),
+    )
+    parser.add_argument(
+        "--sarima-file",
+        type=Path,
+        default=Path("data/processed/modelagem/sarima_previsoes_2024_2025.csv"),
+    )
+    parser.add_argument(
+        "--prophet-file",
+        type=Path,
+        default=Path("data/processed/modelagem/prophet_previsoes_2024_2025.csv"),
+    )
+    parser.add_argument(
+        "--analysis-dir",
+        type=Path,
+        default=Path("data/processed/modelagem"),
+    )
+    parser.add_argument(
+        "--figures-dir",
+        type=Path,
+        default=Path("docs/figures"),
+    )
+    return parser.parse_args()
+
+
+def require_columns(frame: pd.DataFrame, columns: set[str], source: Path) -> None:
+    missing = columns.difference(frame.columns)
+    if missing:
+        raise ValueError(f"{source}: colunas ausentes: {sorted(missing)}")
+
+
+def load_predictions(
+    path: Path,
+    observed_column: str,
+    predicted_column: str,
+    output_prediction: str,
+) -> pd.DataFrame:
+    frame = pd.read_csv(path)
+    require_columns(frame, {"mes", "uf", observed_column, predicted_column}, path)
+    frame["mes"] = pd.to_datetime(frame["mes"], errors="coerce")
+    frame[observed_column] = pd.to_numeric(frame[observed_column], errors="coerce")
+    frame[predicted_column] = pd.to_numeric(frame[predicted_column], errors="coerce")
+    if frame[["mes", "uf", observed_column, predicted_column]].isna().any().any():
+        raise ValueError(f"{path}: datas, UFs ou valores ausentes.")
+    if frame.duplicated(["mes", "uf"]).any():
+        raise ValueError(f"{path}: chaves mes + uf duplicadas.")
+    return frame[["mes", "uf", observed_column, predicted_column]].rename(
+        columns={observed_column: OBSERVED, predicted_column: output_prediction}
+    )
+
+
+def merge_predictions(args: argparse.Namespace) -> pd.DataFrame:
+    baseline = load_predictions(
+        args.baseline_file,
+        "consumo_mwh",
+        "previsao_consumo_mwh",
+        MODEL_COLUMNS["Linha de base sazonal"],
+    )
+    sarima = load_predictions(
+        args.sarima_file,
+        "observado_mwh",
+        "previsto_sarima_mwh",
+        MODEL_COLUMNS["SARIMA"],
+    )
+    prophet = load_predictions(
+        args.prophet_file,
+        "observado_mwh",
+        "previsto_prophet_mwh",
+        MODEL_COLUMNS["Prophet"],
+    )
+
+    merged = baseline.merge(
+        sarima,
+        on=["mes", "uf"],
+        how="inner",
+        suffixes=("_baseline", "_sarima"),
+        validate="one_to_one",
+    )
+    if not np.allclose(
+        merged[f"{OBSERVED}_baseline"],
+        merged[f"{OBSERVED}_sarima"],
+        rtol=1e-10,
+        atol=1e-6,
+    ):
+        raise ValueError("Baseline e SARIMA possuem valores observados divergentes.")
+    merged = merged.rename(columns={f"{OBSERVED}_baseline": OBSERVED}).drop(
+        columns=[f"{OBSERVED}_sarima"]
+    )
+
+    merged = merged.merge(
+        prophet,
+        on=["mes", "uf"],
+        how="inner",
+        suffixes=("", "_prophet"),
+        validate="one_to_one",
+    )
+    if not np.allclose(
+        merged[OBSERVED],
+        merged[f"{OBSERVED}_prophet"],
+        rtol=1e-10,
+        atol=1e-6,
+    ):
+        raise ValueError("Prophet possui valores observados divergentes.")
+    merged = merged.drop(columns=[f"{OBSERVED}_prophet"])
+
+    expected = len(UF_ORDER) * 24
+    if len(merged) != expected:
+        raise ValueError(f"Esperadas {expected} observacoes; encontradas {len(merged)}.")
+    return merged.sort_values(["mes", "uf"]).reset_index(drop=True)
+
+
+def calculate_metrics(observed: pd.Series, predicted: pd.Series) -> dict[str, float]:
+    error = observed.to_numpy(dtype=float) - predicted.to_numpy(dtype=float)
+    absolute = np.abs(error)
+    actual = observed.to_numpy(dtype=float)
+    valid = actual != 0
+    return {
+        "mae_mwh": float(absolute.mean()),
+        "rmse_mwh": float(np.sqrt(np.mean(error**2))),
+        "mape_pct": float(np.mean(absolute[valid] / np.abs(actual[valid])) * 100),
+    }
+
+
+def build_metrics(merged: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for uf in [*UF_ORDER, "GERAL"]:
+        state = merged if uf == "GERAL" else merged.loc[merged["uf"].eq(uf)]
+        for model, column in MODEL_COLUMNS.items():
+            rows.append(
+                {
+                    "uf": uf,
+                    "modelo": model,
+                    "observacoes": len(state),
+                    **calculate_metrics(state[OBSERVED], state[column]),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def plot_forecasts(merged: pd.DataFrame, output: Path) -> None:
+    fig, axes = plt.subplots(3, 2, figsize=(15, 13), sharex=True)
+    axes = axes.ravel()
+    styles = {
+        "Linha de base sazonal": "--",
+        "SARIMA": "-.",
+        "Prophet": ":",
+    }
+
+    for axis, uf in zip(axes, UF_ORDER):
+        state = merged.loc[merged["uf"].eq(uf)].sort_values("mes")
+        axis.plot(
+            state["mes"],
+            state[OBSERVED] / 1_000_000,
+            color=COLORS["Observado"],
+            marker="o",
+            markersize=3.5,
+            linewidth=2.2,
+            label="Observado",
+        )
+        for model, column in MODEL_COLUMNS.items():
+            axis.plot(
+                state["mes"],
+                state[column] / 1_000_000,
+                color=COLORS[model],
+                linestyle=styles[model],
+                linewidth=1.8,
+                label=model,
+            )
+        if uf == "RS":
+            axis.axvspan(
+                pd.Timestamp("2024-04-01"),
+                pd.Timestamp("2024-05-31"),
+                color="#D1495B",
+                alpha=0.14,
+                label="Evento extremo (RS)",
+            )
+        axis.set_title(uf, fontsize=13, fontweight="bold")
+        axis.grid(alpha=0.25)
+        axis.tick_params(axis="x", rotation=35, labelsize=9)
+        axis.tick_params(axis="y", labelsize=10)
+        axis.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+        axis.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+
+    fig.suptitle(
+        "Consumo observado e previsões dos modelos univariados",
+        fontsize=17,
+        fontweight="bold",
+        y=0.995,
+    )
+    fig.supxlabel("Mês", fontsize=13, y=0.060)
+    fig.supylabel("Consumo de energia elétrica (milhões de MWh)", fontsize=13)
+    handles, labels = axes[0].get_legend_handles_labels()
+    rs_handles, rs_labels = axes[4].get_legend_handles_labels()
+    for handle, label in zip(rs_handles, rs_labels):
+        if label not in labels:
+            handles.append(handle)
+            labels.append(label)
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        ncol=5,
+        frameon=False,
+        fontsize=11,
+        bbox_to_anchor=(0.5, 0.012),
+    )
+    fig.subplots_adjust(bottom=0.13, top=0.91, hspace=0.13, wspace=0.12)
+    fig.tight_layout(rect=(0.025, 0.045, 1, 0.98))
+    fig.savefig(output, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_mape(metrics: pd.DataFrame, output: Path) -> None:
+    state = metrics.loc[metrics["uf"].isin(UF_ORDER)].copy()
+    pivot = state.pivot(index="uf", columns="modelo", values="mape_pct").reindex(
+        UF_ORDER
+    )
+    positions = np.arange(len(UF_ORDER))
+    width = 0.25
+    offsets = (-width, 0.0, width)
+
+    fig, axis = plt.subplots(figsize=(12.5, 7.0))
+    for offset, model in zip(offsets, MODEL_COLUMNS):
+        bars = axis.bar(
+            positions + offset,
+            pivot[model],
+            width,
+            label=model,
+            color=COLORS[model],
+        )
+        axis.bar_label(bars, fmt="%.2f%%", padding=3, fontsize=9)
+
+    general = metrics.loc[metrics["uf"].eq("GERAL")].set_index("modelo")
+    line_styles = {"Linha de base sazonal": "--", "SARIMA": ":", "Prophet": "-."}
+    line_colors = {
+        "Linha de base sazonal": "#B45309",
+        "SARIMA": "#184E77",
+        "Prophet": "#5A189A",
+    }
+    for model in MODEL_COLUMNS:
+        value = float(general.loc[model, "mape_pct"])
+        axis.axhline(
+            value,
+            color=line_colors[model],
+            linestyle=line_styles[model],
+            linewidth=1.8,
+            label=f"MAPE geral {model}: {value:.2f}%",
+        )
+
+    axis.set_xticks(positions, UF_ORDER)
+    axis.set_ylabel("MAPE (%)", fontsize=12)
+    axis.set_xlabel("Unidade da Federação", fontsize=12)
+    axis.set_title(
+        "Comparação do erro percentual dos modelos univariados",
+        fontsize=15,
+        fontweight="bold",
+        pad=12,
+    )
+    axis.grid(axis="y", alpha=0.25)
+    axis.set_axisbelow(True)
+    axis.set_ylim(0, max(float(pivot.max().max()) + 1.4, 6.3))
+    axis.legend(
+        frameon=False,
+        fontsize=9,
+        ncol=2,
+        loc="upper left",
+    )
+    fig.tight_layout()
+    fig.savefig(output, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def main() -> None:
+    args = parse_args()
+    args.analysis_dir.mkdir(parents=True, exist_ok=True)
+    args.figures_dir.mkdir(parents=True, exist_ok=True)
+
+    merged = merge_predictions(args)
+    metrics = build_metrics(merged)
+
+    predictions_path = (
+        args.analysis_dir / "comparacao_modelos_univariados_previsoes_2024_2025.csv"
+    )
+    metrics_path = (
+        args.analysis_dir / "comparacao_modelos_univariados_metricas_2024_2025.csv"
+    )
+    forecast_figure = (
+        args.figures_dir / "comparacao_modelos_univariados_2024_2025.png"
+    )
+    mape_figure = (
+        args.figures_dir / "comparacao_mape_modelos_univariados_2024_2025.png"
+    )
+
+    merged.to_csv(predictions_path, index=False, date_format="%Y-%m-%d")
+    metrics.to_csv(metrics_path, index=False)
+    plot_forecasts(merged, forecast_figure)
+    plot_mape(metrics, mape_figure)
+
+    print("Comparação dos modelos univariados concluída.\n")
+    print(
+        metrics.pivot(index="uf", columns="modelo", values="mape_pct")
+        .reindex([*UF_ORDER, "GERAL"])
+        .to_string(float_format=lambda value: f"{value:.3f}")
+    )
+    print(f"\nPrevisões: {predictions_path}")
+    print(f"Métricas: {metrics_path}")
+    print(f"Figura temporal: {forecast_figure}")
+    print(f"Figura MAPE: {mape_figure}")
+
+
+if __name__ == "__main__":
+    main()

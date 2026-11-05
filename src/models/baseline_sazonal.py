@@ -15,7 +15,7 @@ DEFASAGEM_SAZONAL = 12
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Avalia o baseline sazonal do consumo mensal de energia da EPE."
+        description="Avalia a linha de base sazonal do consumo mensal de energia da EPE."
     )
     parser.add_argument(
         "--input-file",
@@ -114,7 +114,7 @@ def run_baseline(data: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
             f"Teste deveria conter {expected_rows} linhas, mas contém {len(test)}."
         )
     if test["previsao_consumo_mwh"].isna().any():
-        raise ValueError("O baseline produziu previsões nulas no período de teste.")
+        raise ValueError("a linha de base produziu previsões nulas no período de teste.")
 
     test["erro_mwh"] = test["consumo_mwh"] - test["previsao_consumo_mwh"]
     test["erro_absoluto_mwh"] = test["erro_mwh"].abs()
