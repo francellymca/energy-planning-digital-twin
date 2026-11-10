@@ -5,3 +5,4 @@ xlrd>=2.0.1
 matplotlib>=3.9.0
 statsmodels==0.15.0
 prophet==1.5.0
+tensorflow==2.21.0

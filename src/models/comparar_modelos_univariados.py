@@ -1,4 +1,4 @@
-"""Compara linha de base sazonal, SARIMA e Prophet no teste 2024-2025."""
+"""Compara linha de base sazonal, SARIMA, Prophet e LSTM no teste 2024-2025."""
 
 from __future__ import annotations
 
@@ -17,12 +17,14 @@ MODEL_COLUMNS = {
     "Linha de base sazonal": "previsto_baseline_mwh",
     "SARIMA": "previsto_sarima_mwh",
     "Prophet": "previsto_prophet_mwh",
+    "LSTM": "previsto_lstm_mwh",
 }
 COLORS = {
     "Observado": "#184E77",
     "Linha de base sazonal": "#E07A00",
     "SARIMA": "#2A9D8F",
     "Prophet": "#7B2CBF",
+    "LSTM": "#C44536",
 }
 
 
@@ -45,6 +47,13 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("data/processed/modelagem/prophet_previsoes_2024_2025.csv"),
     )
+    
+    parser.add_argument(
+        "--lstm-file",
+        type=Path,
+        default=Path("data/processed/modelagem/lstm_previsoes_2024_2025.csv"),
+    )
+    
     parser.add_argument(
         "--analysis-dir",
         type=Path,
@@ -103,6 +112,12 @@ def merge_predictions(args: argparse.Namespace) -> pd.DataFrame:
         "previsto_prophet_mwh",
         MODEL_COLUMNS["Prophet"],
     )
+    lstm = load_predictions(
+        args.lstm_file,
+        "observado_mwh",
+        "previsto_lstm_mwh",
+        MODEL_COLUMNS["LSTM"],
+    )
 
     merged = baseline.merge(
         sarima,
@@ -137,6 +152,24 @@ def merge_predictions(args: argparse.Namespace) -> pd.DataFrame:
     ):
         raise ValueError("Prophet possui valores observados divergentes.")
     merged = merged.drop(columns=[f"{OBSERVED}_prophet"])
+    
+    merged = merged.merge(
+        lstm,
+        on=["mes", "uf"],
+        how="inner",
+        suffixes=("", "_lstm"),
+        validate="one_to_one",
+    )
+
+    if not np.allclose(
+        merged[OBSERVED],
+        merged[f"{OBSERVED}_lstm"],
+        rtol=1e-10,
+        atol=1e-6,
+    ):
+        raise ValueError("LSTM possui valores observados divergentes.")
+
+    merged = merged.drop(columns=[f"{OBSERVED}_lstm"])
 
     expected = len(UF_ORDER) * 24
     if len(merged) != expected:
@@ -179,6 +212,7 @@ def plot_forecasts(merged: pd.DataFrame, output: Path) -> None:
         "Linha de base sazonal": "--",
         "SARIMA": "-.",
         "Prophet": ":",
+        "LSTM": (0, (5, 1)),
     }
 
     for axis, uf in zip(axes, UF_ORDER):
@@ -234,7 +268,7 @@ def plot_forecasts(merged: pd.DataFrame, output: Path) -> None:
         handles,
         labels,
         loc="lower center",
-        ncol=5,
+        ncol=6,
         frameon=False,
         fontsize=11,
         bbox_to_anchor=(0.5, 0.012),
@@ -247,14 +281,27 @@ def plot_forecasts(merged: pd.DataFrame, output: Path) -> None:
 
 def plot_mape(metrics: pd.DataFrame, output: Path) -> None:
     state = metrics.loc[metrics["uf"].isin(UF_ORDER)].copy()
-    pivot = state.pivot(index="uf", columns="modelo", values="mape_pct").reindex(
-        UF_ORDER
-    )
-    positions = np.arange(len(UF_ORDER))
-    width = 0.25
-    offsets = (-width, 0.0, width)
 
-    fig, axis = plt.subplots(figsize=(12.5, 7.0))
+    pivot = (
+        state.pivot(index="uf", columns="modelo", values="mape_pct")
+        .reindex(UF_ORDER)
+    )
+
+    positions = np.arange(len(UF_ORDER))
+
+    # Quatro barras centralizadas em cada estado
+    width = 0.18
+    offsets = (
+        -1.5 * width,
+        -0.5 * width,
+         0.5 * width,
+         1.5 * width,
+    )
+
+    fig, axis = plt.subplots(figsize=(1.5, 7.5))
+
+    bar_handles = []
+
     for offset, model in zip(offsets, MODEL_COLUMNS):
         bars = axis.bar(
             positions + offset,
@@ -262,46 +309,123 @@ def plot_mape(metrics: pd.DataFrame, output: Path) -> None:
             width,
             label=model,
             color=COLORS[model],
+            zorder=3,
         )
-        axis.bar_label(bars, fmt="%.2f%%", padding=3, fontsize=9)
 
-    general = metrics.loc[metrics["uf"].eq("GERAL")].set_index("modelo")
-    line_styles = {"Linha de base sazonal": "--", "SARIMA": ":", "Prophet": "-."}
+        bar_handles.append(bars)
+
+        for bar in bars:
+            value = bar.get_height()
+
+            axis.text(
+                bar.get_x() + bar.get_width() / 2,
+                value + 0.11,
+                f"{value:.2f}%",
+                ha="center",
+                va="bottom",
+                fontsize=8.5,
+                zorder=6,
+                bbox={
+                    "facecolor": "white",
+                    "edgecolor": "none",
+                    "alpha": 0.88,
+                    "pad": 0.6,
+                },
+            )
+
+    general = (
+        metrics.loc[metrics["uf"].eq("GERAL")]
+        .set_index("modelo")
+    )
+
+    line_styles = {
+        "Linha de base sazonal": "--",
+        "SARIMA": ":",
+        "Prophet": "-.",
+        "LSTM": (0, (5, 1)),
+    }
+
     line_colors = {
         "Linha de base sazonal": "#B45309",
         "SARIMA": "#184E77",
         "Prophet": "#5A189A",
+        "LSTM": "#8B1E1E",
     }
+
+    line_handles = []
+
     for model in MODEL_COLUMNS:
         value = float(general.loc[model, "mape_pct"])
-        axis.axhline(
+
+        line = axis.axhline(
             value,
             color=line_colors[model],
             linestyle=line_styles[model],
             linewidth=1.8,
             label=f"MAPE geral {model}: {value:.2f}%",
+            zorder=1,
         )
+
+        line_handles.append(line)
 
     axis.set_xticks(positions, UF_ORDER)
     axis.set_ylabel("MAPE (%)", fontsize=12)
     axis.set_xlabel("Unidade da Federação", fontsize=12)
-    axis.set_title(
+
+    fig.suptitle(
         "Comparação do erro percentual dos modelos univariados",
         fontsize=15,
         fontweight="bold",
-        pad=12,
+        y=0.975,
     )
-    axis.grid(axis="y", alpha=0.25)
+
+    axis.grid(axis="y", alpha=0.25, zorder=0)
     axis.set_axisbelow(True)
-    axis.set_ylim(0, max(float(pivot.max().max()) + 1.4, 6.3))
-    axis.legend(
+
+    # Espaço calculado pelo maior MAPE estadual
+    maximum_mape = float(pivot.max().max())
+    axis.set_ylim(0, maximum_mape * 1.16)
+
+    # Uma legenda para as médias gerais
+    legend_lines = fig.legend(
+        handles=line_handles,
+        labels=[
+            handle.get_label()
+            for handle in line_handles
+        ],
         frameon=False,
         fontsize=9,
         ncol=2,
         loc="upper left",
+        bbox_to_anchor=(0.07, 0.925),        
     )
-    fig.tight_layout()
-    fig.savefig(output, dpi=300, bbox_inches="tight")
+
+    # Outra legenda para as barras
+    fig.legend(
+        handles=[bars[0] for bars in bar_handles],
+        labels=list(MODEL_COLUMNS.keys()),
+        frameon=False,
+        fontsize=9,
+        ncol=2,
+        loc="upper right",
+        bbox_to_anchor=(0.94, 0.925),       
+    )
+
+    fig.subplots_adjust(
+        top=0.78,
+        bottom=0.13,
+        left=0.08,
+        right=0.98,
+    )
+    
+    fig.set_size_inches(14.5, 7.5, forward=True)
+
+    fig.savefig(
+        output,
+        dpi=300,
+        facecolor="white",
+    )
+
     plt.close(fig)
 
 

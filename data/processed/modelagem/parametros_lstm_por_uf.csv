@@ -1,0 +1,7 @@
+uf,janela_meses,unidades_lstm,unidades_densa,dropout,batch_size,seed,epocas_executadas_selecao,melhor_epoca,rmse_validacao_mwh,parametros_treinaveis,estrategia_teste,criterio_selecao
+BA,12,32,16,0.1,8,42,39,4,91556.44790933438,4897,previsao_recursiva_24_meses,rmse_validacao_recursiva_12_meses
+MG,12,32,16,0.1,8,42,71,36,238260.9789883144,4897,previsao_recursiva_24_meses,rmse_validacao_recursiva_12_meses
+PR,12,32,16,0.1,8,42,39,4,120896.63985574612,4897,previsao_recursiva_24_meses,rmse_validacao_recursiva_12_meses
+RJ,12,32,16,0.1,8,42,79,44,157837.93677529102,4897,previsao_recursiva_24_meses,rmse_validacao_recursiva_12_meses
+RS,12,32,16,0.1,8,42,67,32,121962.83594265979,4897,previsao_recursiva_24_meses,rmse_validacao_recursiva_12_meses
+SP,12,32,16,0.1,8,42,39,4,486153.80686567613,4897,previsao_recursiva_24_meses,rmse_validacao_recursiva_12_meses
