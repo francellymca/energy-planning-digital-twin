@@ -193,6 +193,44 @@ def recursive_forecast(
 
     return np.asarray(predictions, dtype=np.float64)
 
+def progressive_forecast(
+    model: keras.Model,
+    initial_window: np.ndarray,
+    observed_scaled: np.ndarray,
+) -> np.ndarray:
+    """Realiza previsões de um passo à frente com origem móvel.
+
+    Cada valor observado é incorporado à janela somente depois que a
+    previsão correspondente foi produzida.
+    """
+    history = list(
+        np.asarray(initial_window, dtype=np.float32).reshape(-1)
+    )
+    predictions: list[float] = []
+    window = len(initial_window)
+
+    for observed in np.asarray(
+        observed_scaled,
+        dtype=np.float32,
+    ).reshape(-1):
+        model_input = np.asarray(
+            history[-window:],
+            dtype=np.float32,
+        ).reshape(1, window, 1)
+
+        prediction = float(
+            model(model_input, training=False)
+            .numpy()
+            .reshape(-1)[0]
+        )
+
+        predictions.append(prediction)
+
+        # O observado entra no histórico somente após a previsão do mês.
+        history.append(float(observed))
+
+    return np.asarray(predictions, dtype=np.float64)
+
 class RecursiveValidationCallback(keras.callbacks.Callback):
     """Seleciona a época com uma previsão recursiva do período de validação."""
 
@@ -425,12 +463,6 @@ def train_state_model(
         )
     )
 
-    # Primeira etapa: seleção da quantidade de épocas com validação em 2023.
-    keras.backend.clear_session()
-    configure_seed(seed)
-
-    selection_model = build_model(window)
-
     # Segunda etapa: novo treinamento com todo o período de 2016 a 2023,
     # utilizando a quantidade de épocas selecionada anteriormente.
     keras.backend.clear_session()
@@ -449,16 +481,17 @@ def train_state_model(
 
     initial_window = scaled_train[-window:]
 
-    forecast_scaled = recursive_forecast(
+    observed = test["consumo_mwh"].to_numpy(dtype=np.float64)
+    observed_scaled = scaler.transform(observed)
+
+    forecast_scaled = progressive_forecast(
         model=final_model,
         initial_window=initial_window,
-        horizon=len(test),
+        observed_scaled=observed_scaled,
     )
 
     forecast = scaler.inverse_transform(forecast_scaled)
     forecast = np.maximum(forecast, 0.0)
-
-    observed = test["consumo_mwh"].to_numpy(dtype=np.float64)
     error = observed - forecast
     absolute_error = np.abs(error)
 
@@ -495,7 +528,7 @@ def train_state_model(
         "melhor_epoca": best_epoch,
         "rmse_validacao_mwh": validation_rmse,
         "parametros_treinaveis": int(final_model.count_params()),
-        "estrategia_teste": "previsao_recursiva_24_meses",
+        "estrategia_teste": "previsao_progressiva_um_passo_a_frente",
         "criterio_selecao": "rmse_validacao_recursiva_12_meses",
     }
 
