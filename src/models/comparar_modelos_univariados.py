@@ -280,17 +280,24 @@ def plot_forecasts(merged: pd.DataFrame, output: Path) -> None:
 
 
 def plot_mape(metrics: pd.DataFrame, output: Path) -> None:
-    state = metrics.loc[metrics["uf"].isin(UF_ORDER)].copy()
+    state = metrics.loc[
+        metrics["uf"].isin(UF_ORDER)
+    ].copy()
 
     pivot = (
-        state.pivot(index="uf", columns="modelo", values="mape_pct")
+        state.pivot(
+            index="uf",
+            columns="modelo",
+            values="mape_pct",
+        )
         .reindex(UF_ORDER)
     )
 
-    positions = np.arange(len(UF_ORDER))
+    # Distância entre os centros dos estados.
+    positions = np.arange(len(UF_ORDER)) * 1.18
 
-    # Quatro barras centralizadas em cada estado
-    width = 0.18
+    # Barras mais largas para comportar os percentuais horizontais.
+    width = 0.225
     offsets = (
         -1.5 * width,
         -0.5 * width,
@@ -298,40 +305,39 @@ def plot_mape(metrics: pd.DataFrame, output: Path) -> None:
          1.5 * width,
     )
 
-    fig, axis = plt.subplots(figsize=(1.5, 7.5))
+    fig, axis = plt.subplots(figsize=(13.5, 7.0))
 
-    bar_handles = []
+    bar_handles = {}
 
     for offset, model in zip(offsets, MODEL_COLUMNS):
         bars = axis.bar(
             positions + offset,
             pivot[model],
-            width,
+            width=width,
             label=model,
             color=COLORS[model],
             zorder=3,
         )
 
-        bar_handles.append(bars)
+        bar_handles[model] = bars
 
-        for bar in bars:
-            value = bar.get_height()
-
-            axis.text(
-                bar.get_x() + bar.get_width() / 2,
-                value + 0.11,
-                f"{value:.2f}%",
-                ha="center",
-                va="bottom",
-                fontsize=8.5,
-                zorder=6,
-                bbox={
-                    "facecolor": "white",
-                    "edgecolor": "none",
-                    "alpha": 0.88,
-                    "pad": 0.6,
-                },
-            )
+        axis.bar_label(
+            bars,
+            labels=[
+                f"{value:.2f}%"
+                for value in pivot[model]
+            ],
+            padding=4,
+            fontsize=8.5,
+            rotation=0,
+            zorder=6,
+            bbox={
+                "facecolor": "white",
+                "edgecolor": "none",
+                "alpha": 0.82,
+                "pad": 0.35,
+            },
+        )
 
     general = (
         metrics.loc[metrics["uf"].eq("GERAL")]
@@ -355,13 +361,16 @@ def plot_mape(metrics: pd.DataFrame, output: Path) -> None:
     line_handles = []
 
     for model in MODEL_COLUMNS:
-        value = float(general.loc[model, "mape_pct"])
+        value = float(
+            general.loc[model, "mape_pct"]
+        )
 
         line = axis.axhline(
-            value,
+            y=value,
             color=line_colors[model],
             linestyle=line_styles[model],
             linewidth=1.8,
+            alpha=0.90,
             label=f"MAPE geral {model}: {value:.2f}%",
             zorder=1,
         )
@@ -370,7 +379,31 @@ def plot_mape(metrics: pd.DataFrame, output: Path) -> None:
 
     axis.set_xticks(positions, UF_ORDER)
     axis.set_ylabel("MAPE (%)", fontsize=12)
-    axis.set_xlabel("Unidade da Federação", fontsize=12)
+    axis.set_xlabel(
+        "Unidade da Federação",
+        fontsize=12,
+    )
+
+    axis.tick_params(
+        axis="both",
+        labelsize=10,
+    )
+
+    axis.grid(
+        axis="y",
+        alpha=0.25,
+        zorder=0,
+    )
+    axis.set_axisbelow(True)
+
+    maximum_mape = float(pivot.max().max())
+    axis.set_ylim(0, maximum_mape + 1.25)
+
+    # Reduz as margens laterais internas do gráfico.
+    axis.set_xlim(
+        positions[0] - 0.70,
+        positions[-1] + 0.70,
+    )
 
     fig.suptitle(
         "Comparação do erro percentual dos modelos univariados",
@@ -379,14 +412,7 @@ def plot_mape(metrics: pd.DataFrame, output: Path) -> None:
         y=0.975,
     )
 
-    axis.grid(axis="y", alpha=0.25, zorder=0)
-    axis.set_axisbelow(True)
-
-    # Espaço calculado pelo maior MAPE estadual
-    maximum_mape = float(pivot.max().max())
-    axis.set_ylim(0, maximum_mape * 1.16)
-
-    # Uma legenda para as médias gerais
+    # Legenda das linhas de MAPE geral.
     legend_lines = fig.legend(
         handles=line_handles,
         labels=[
@@ -397,33 +423,41 @@ def plot_mape(metrics: pd.DataFrame, output: Path) -> None:
         fontsize=9,
         ncol=2,
         loc="upper left",
-        bbox_to_anchor=(0.07, 0.925),        
+        bbox_to_anchor=(0.065, 0.925),
+        columnspacing=1.8,
+        handlelength=2.6,
+        handletextpad=0.7,
     )
 
-    # Outra legenda para as barras
+    # Legenda das barras.
     fig.legend(
-        handles=[bars[0] for bars in bar_handles],
+        handles=[
+            bar_handles[model][0]
+            for model in MODEL_COLUMNS
+        ],
         labels=list(MODEL_COLUMNS.keys()),
         frameon=False,
         fontsize=9,
         ncol=2,
         loc="upper right",
-        bbox_to_anchor=(0.94, 0.925),       
+        bbox_to_anchor=(0.955, 0.925),
+        columnspacing=1.5,
+        handletextpad=0.7,
     )
 
+    # Aproxima o topo do eixo das legendas.
     fig.subplots_adjust(
-        top=0.78,
+        top=0.815,
         bottom=0.13,
-        left=0.08,
-        right=0.98,
+        left=0.075,
+        right=0.985,
     )
-    
-    fig.set_size_inches(14.5, 7.5, forward=True)
 
     fig.savefig(
         output,
         dpi=300,
         facecolor="white",
+        bbox_inches="tight",
     )
 
     plt.close(fig)
