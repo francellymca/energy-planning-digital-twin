@@ -1030,6 +1030,27 @@ def calculate_shap_results(
         )
         .reset_index(drop=True)
     )
+    
+    total_global_importance = float(
+        global_importance[
+            "media_shap_absoluto"
+        ].sum()
+    )
+
+    if total_global_importance <= 0:
+        raise ValueError(
+            "A importância SHAP global deve ser positiva."
+        )
+
+    global_importance[
+        "importancia_relativa_pct"
+    ] = (
+        global_importance[
+            "media_shap_absoluto"
+        ]
+        / total_global_importance
+        * 100
+    )
 
     state_importance = (
         shap_long.groupby(
@@ -1051,6 +1072,27 @@ def calculate_shap_results(
             ascending=[True, False],
         )
         .reset_index(drop=True)
+    )
+    
+    state_totals = (
+        state_importance.groupby("uf")[
+            "media_shap_absoluto"
+        ]
+        .transform("sum")
+    )
+
+    state_importance[
+        "importancia_relativa_pct"
+    ] = np.where(
+        state_totals > 0,
+        (
+            state_importance[
+                "media_shap_absoluto"
+            ]
+            / state_totals
+            * 100
+        ),
+        0.0,
     )
 
     return (
@@ -1133,16 +1175,16 @@ def plot_global_shap_importance(
 
     bars = axis.barh(
         selected["rotulo"],
-        selected["media_shap_absoluto"],
+        selected["importancia_relativa_pct"],
         color="#2A9D8F",
     )
 
     axis.bar_label(
         bars,
         labels=[
-            f"{value:.6f}"
+            f"{value:.2f}"
             for value in selected[
-                "media_shap_absoluto"
+                "importancia_relativa_pct"
             ]
         ],
         padding=4,
@@ -1151,8 +1193,7 @@ def plot_global_shap_importance(
 
     axis.set_xlabel(
         (
-            "Média de |SHAP| no log do "
-            "fator de correção sazonal"
+            "Importância relativa global (%)"
         ),
         fontsize=11,
     )
@@ -1179,7 +1220,9 @@ def plot_global_shap_importance(
     axis.set_axisbelow(True)
 
     maximum = float(
-        selected["media_shap_absoluto"].max()
+        selected[
+            "importancia_relativa_pct"
+        ].max()
     )
 
     axis.set_xlim(
