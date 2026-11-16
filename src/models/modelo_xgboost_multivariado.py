@@ -1373,6 +1373,83 @@ def main() -> None:
         "\nModelo selecionado para XAI: "
         f"{best_group}"
     )
+    
+    artifacts_dir = (
+        args.output_dir
+        / "artefatos_xgboost"
+    )
+
+    artifacts_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    selected_model_path = (
+        artifacts_dir
+        / "modelo_xgboost_selecionado.json"
+    )
+
+    selected_metadata_path = (
+        artifacts_dir
+        / "metadados_xgboost_selecionado.json"
+    )
+
+    selected_model = trained_models[best_group]
+    selected_features = FEATURE_GROUPS[best_group]
+    selected_selection = selections[best_group]
+
+    selected_model.save_model(
+        selected_model_path
+    )
+
+    selected_metadata = {
+        "versao_artefato": 1,
+        "grupo_atributos": best_group,
+        "configuracao": str(
+            selected_selection["configuracao"]
+        ),
+        "numero_arvores": int(
+            selected_selection["numero_arvores"]
+        ),
+        "mape_validacao_pct": float(
+            selected_selection["mape_validacao_pct"]
+        ),
+        "rmse_validacao_mwh": float(
+            selected_selection["rmse_validacao_mwh"]
+        ),
+        "atributos_numericos": list(
+            selected_features
+        ),
+        "colunas_modelo": (
+            test_matrices[best_group]
+            .columns
+            .tolist()
+        ),
+        "ordem_ufs": UF_ORDER,
+        "variavel_alvo": TARGET,
+        "transformacao_alvo": (
+            "log(consumo_mwh / consumo_mwh_lag_12)"
+        ),
+        "referencia_sazonal": (
+            "consumo_mwh_lag_12"
+        ),
+        "inicio_treinamento": TRAIN_START_YEAR,
+        "fim_treinamento": VALIDATION_YEAR,
+        "inicio_teste": TEST_START_YEAR,
+        "fim_teste": TEST_END_YEAR,
+        "seed": args.seed,
+    }
+
+    with selected_metadata_path.open(
+        "w",
+        encoding="utf-8",
+    ) as metadata_file:
+        json.dump(
+            selected_metadata,
+            metadata_file,
+            ensure_ascii=False,
+            indent=2,
+        )
 
     predictions_table = pd.concat(
         all_predictions,
@@ -1508,6 +1585,8 @@ def main() -> None:
         f"\nSHAP global: {global_importance_path}"
         f"\nSHAP por estado: {state_importance_path}"
         f"\nFigura SHAP: {shap_figure_path}"
+        f"\nModelo selecionado: {selected_model_path}"
+        f"\nMetadados do modelo: {selected_metadata_path}"
     )
 
 
