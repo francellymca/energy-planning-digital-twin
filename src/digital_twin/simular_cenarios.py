@@ -47,7 +47,10 @@ COLORS = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Projeta 2026 e simula cenários estaduais de consumo."
+        description=(
+            "Projeta o consumo entre 2026 e 2030 e simula "
+            "cenários estaduais de demanda."
+        )
     )
     parser.add_argument(
         "--features-file",
@@ -73,7 +76,16 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("docs/figures"),
     )
-    parser.add_argument("--forecast-year", type=int, default=2026)
+    parser.add_argument(
+        "--forecast-start-year",
+        type=int,
+        default=2026,
+    )
+    parser.add_argument(
+        "--forecast-end-year",
+        type=int,
+        default=2030,
+    )
     parser.add_argument("--history-start-year", type=int, default=2016)
     parser.add_argument("--history-end-year", type=int, default=2023)
     parser.add_argument("--maxiter", type=int, default=300)
@@ -164,96 +176,220 @@ def calculate_historical_rates(
 def forecast_reference(
     data: pd.DataFrame,
     parameters: pd.DataFrame,
-    forecast_year: int,
+    forecast_start_year: int,
+    forecast_end_year: int,
     maxiter: int,
 ) -> pd.DataFrame:
     rows: list[pd.DataFrame] = []
-    expected_last_month = pd.Timestamp(forecast_year - 1, 12, 1)
+
+    expected_last_month = pd.Timestamp(
+        forecast_start_year - 1,
+        12,
+        1,
+    )
+
+    forecast_steps = (
+        forecast_end_year
+        - forecast_start_year
+        + 1
+    ) * 12
+
     future_months = pd.date_range(
-        start=f"{forecast_year}-01-01", periods=12, freq="MS"
+        start=f"{forecast_start_year}-01-01",
+        periods=forecast_steps,
+        freq="MS",
     )
 
     for uf in UF_ORDER:
         state = (
             data.loc[
-                data["uf"].eq(uf) & data["mes"].lt(f"{forecast_year}-01-01"),
+                data["uf"].eq(uf)
+                & data["mes"].lt(
+                    f"{forecast_start_year}-01-01"
+                ),
                 ["mes", "consumo_mwh"],
             ]
             .sort_values("mes")
             .set_index("mes")["consumo_mwh"]
         )
-        if state.empty or state.index.max() != expected_last_month:
+
+        if (
+            state.empty
+            or state.index.max() != expected_last_month
+        ):
             raise ValueError(
-                f"{uf}: o histórico deve terminar em {expected_last_month:%Y-%m}."
+                f"{uf}: o histórico deve terminar em "
+                f"{expected_last_month:%Y-%m}."
             )
 
-        parameter = parameters.loc[parameters["uf"].eq(uf)].iloc[0]
-        order = parse_order(str(parameter["ordem"]), 3)
-        seasonal_order = parse_order(str(parameter["ordem_sazonal"]), 4)
+        parameter = parameters.loc[
+            parameters["uf"].eq(uf)
+        ].iloc[0]
+
+        order = parse_order(
+            str(parameter["ordem"]),
+            3,
+        )
+
+        seasonal_order = parse_order(
+            str(parameter["ordem_sazonal"]),
+            4,
+        )
 
         print(
-            f"{uf}: ajustando SARIMA{order}x{seasonal_order} "
-            f"e projetando {forecast_year}..."
+            f"{uf}: ajustando SARIMA{order}x"
+            f"{seasonal_order} e projetando "
+            f"{forecast_start_year}-{forecast_end_year}..."
         )
-        result = fit_model(state, order, seasonal_order, maxiter)
+
+        result = fit_model(
+            state,
+            order,
+            seasonal_order,
+            maxiter,
+        )
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            forecast_result = result.get_forecast(steps=12)
 
-        mean = np.asarray(forecast_result.predicted_mean, dtype=float) * SCALE
-        confidence = np.asarray(
-            forecast_result.conf_int(alpha=0.05), dtype=float
-        ) * SCALE
+            forecast_result = result.get_forecast(
+                steps=forecast_steps
+            )
+
+        mean = (
+            np.asarray(
+                forecast_result.predicted_mean,
+                dtype=float,
+            )
+            * SCALE
+        )
+
+        confidence = (
+            np.asarray(
+                forecast_result.conf_int(alpha=0.05),
+                dtype=float,
+            )
+            * SCALE
+        )
 
         rows.append(
             pd.DataFrame(
                 {
                     "mes": future_months,
-                    "ano": forecast_year,
+                    "ano": future_months.year,
                     "uf": uf,
-                    "referencia_sarima_mwh": np.maximum(mean, 0.0),
-                    "limite_inferior_95_mwh": np.maximum(confidence[:, 0], 0.0),
-                    "limite_superior_95_mwh": np.maximum(confidence[:, 1], 0.0),
+                    "referencia_sarima_mwh": np.maximum(
+                        mean,
+                        0.0,
+                    ),
+                    "limite_inferior_95_mwh": np.maximum(
+                        confidence[:, 0],
+                        0.0,
+                    ),
+                    "limite_superior_95_mwh": np.maximum(
+                        confidence[:, 1],
+                        0.0,
+                    ),
                     "ordem": str(order),
-                    "ordem_sazonal": str(seasonal_order),
+                    "ordem_sazonal": str(
+                        seasonal_order
+                    ),
                 }
             )
         )
 
-    return pd.concat(rows, ignore_index=True)
+    return pd.concat(
+        rows,
+        ignore_index=True,
+    )
 
 
 def build_scenarios(
     reference: pd.DataFrame,
     rates: pd.DataFrame,
 ) -> pd.DataFrame:
-    merged = reference.merge(rates, on="uf", how="left", validate="many_to_one")
+    merged = reference.merge(
+        rates,
+        on="uf",
+        how="left",
+        validate="many_to_one",
+    )
+
+    forecast_start_year = int(
+        merged["ano"].min()
+    )
+
+    merged["ano_horizonte"] = (
+        merged["ano"]
+        - forecast_start_year
+        + 1
+    )
+
     scenario_rows: list[pd.DataFrame] = []
+
+    adjustment_columns = {
+        "p25": "ajuste_p25_pct",
+        "mediana": "ajuste_mediana_pct",
+        "p75": "ajuste_p75_pct",
+    }
 
     for scenario, percentile_column in SCENARIOS.items():
         current = merged.copy()
-        adjustment_column = {
-            "p25": "ajuste_p25_pct",
-            "mediana": "ajuste_mediana_pct",
-            "p75": "ajuste_p75_pct",
-        }[percentile_column]
+
+        adjustment_column = adjustment_columns[
+            percentile_column
+        ]
+
         current["cenario"] = scenario
-        current["cenario_rotulo"] = SCENARIO_LABELS[scenario]
-        current["percentil_historico_pct"] = current[percentile_column]
-        current["ajuste_relativo_referencia_pct"] = current[adjustment_column]
-        multiplier = 1.0 + current[adjustment_column] / 100.0
-        current["consumo_cenario_mwh"] = (
-            current["referencia_sarima_mwh"] * multiplier
+        current["cenario_rotulo"] = (
+            SCENARIO_LABELS[scenario]
         )
-        current["diferenca_referencia_mwh"] = (
+
+        current["percentil_historico_pct"] = (
+            current[percentile_column]
+        )
+
+        current["ajuste_anual_referencia_pct"] = (
+            current[adjustment_column]
+        )
+
+        annual_multiplier = (
+            1.0
+            + current[
+                "ajuste_anual_referencia_pct"
+            ]
+            / 100.0
+        )
+
+        cumulative_multiplier = (
+            annual_multiplier
+            ** current["ano_horizonte"]
+        )
+
+        current[
+            "ajuste_relativo_referencia_pct"
+        ] = (
+            cumulative_multiplier - 1.0
+        ) * 100.0
+
+        current["consumo_cenario_mwh"] = (
+            current["referencia_sarima_mwh"]
+            * cumulative_multiplier
+        )
+
+        current[
+            "diferenca_referencia_mwh"
+        ] = (
             current["consumo_cenario_mwh"]
             - current["referencia_sarima_mwh"]
         )
+
         scenario_rows.append(current)
 
     columns = [
         "mes",
         "ano",
+        "ano_horizonte",
         "uf",
         "cenario",
         "cenario_rotulo",
@@ -261,6 +397,7 @@ def build_scenarios(
         "consumo_cenario_mwh",
         "diferenca_referencia_mwh",
         "percentil_historico_pct",
+        "ajuste_anual_referencia_pct",
         "ajuste_relativo_referencia_pct",
         "limite_inferior_95_mwh",
         "limite_superior_95_mwh",
@@ -268,8 +405,16 @@ def build_scenarios(
         "ordem",
         "ordem_sazonal",
     ]
-    return pd.concat(scenario_rows, ignore_index=True)[columns].sort_values(
-        ["uf", "cenario", "mes"]
+
+    return (
+        pd.concat(
+            scenario_rows,
+            ignore_index=True,
+        )[columns]
+        .sort_values(
+            ["uf", "cenario", "mes"]
+        )
+        .reset_index(drop=True)
     )
 
 
@@ -283,6 +428,10 @@ def build_annual_summary(scenarios: pd.DataFrame) -> pd.DataFrame:
             consumo_cenario_mwh=("consumo_cenario_mwh", "sum"),
             diferenca_referencia_mwh=("diferenca_referencia_mwh", "sum"),
             percentil_historico_pct=("percentil_historico_pct", "first"),
+            ajuste_anual_referencia_pct=(
+                "ajuste_anual_referencia_pct",
+                "first",
+            ),
             ajuste_relativo_referencia_pct=(
                 "ajuste_relativo_referencia_pct",
                 "first",
@@ -296,7 +445,12 @@ def build_annual_summary(scenarios: pd.DataFrame) -> pd.DataFrame:
         * 100.0,
         np.nan,
     )
-    return summary.sort_values(["uf", "cenario"])
+    return (
+        summary.sort_values(
+            ["uf", "ano", "cenario"]
+        )
+        .reset_index(drop=True)
+    )
 
 
 def plot_scenarios(scenarios: pd.DataFrame, output: Path) -> None:
@@ -343,7 +497,7 @@ def plot_scenarios(scenarios: pd.DataFrame, output: Path) -> None:
         axis.tick_params(axis="x", rotation=35)
 
     fig.suptitle(
-        "Projeção de referência e cenários de consumo para 2026",
+        "Projeção de referência e cenários de consumo: 2026–2030",
         fontsize=16,
         fontweight="bold",
         y=0.98,
@@ -367,67 +521,209 @@ def plot_scenarios(scenarios: pd.DataFrame, output: Path) -> None:
 
 def main() -> None:
     args = parse_args()
-    if args.history_start_year >= args.history_end_year:
-        raise ValueError("O período histórico dos cenários é inválido.")
 
-    data, parameters = load_inputs(args.features_file, args.parameters_file)
+    if (
+        args.history_start_year
+        >= args.history_end_year
+    ):
+        raise ValueError(
+            "O período histórico dos cenários "
+            "é inválido."
+        )
+
+    if (
+        args.forecast_start_year
+        > args.forecast_end_year
+    ):
+        raise ValueError(
+            "O início da projeção não pode ser "
+            "posterior ao final."
+        )
+
+    data, parameters = load_inputs(
+        args.features_file,
+        args.parameters_file,
+    )
+
     rates = calculate_historical_rates(
-        data, args.history_start_year, args.history_end_year
+        data,
+        args.history_start_year,
+        args.history_end_year,
     )
+
     reference = forecast_reference(
-        data, parameters, args.forecast_year, args.maxiter
+        data=data,
+        parameters=parameters,
+        forecast_start_year=(
+            args.forecast_start_year
+        ),
+        forecast_end_year=(
+            args.forecast_end_year
+        ),
+        maxiter=args.maxiter,
     )
-    scenarios = build_scenarios(reference, rates)
-    summary = build_annual_summary(scenarios)
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    args.figures_dir.mkdir(parents=True, exist_ok=True)
-    rates_path = args.output_dir / "taxas_historicas_cenarios_por_uf.csv"
-    reference_path = args.output_dir / f"projecao_sarima_{args.forecast_year}.csv"
-    scenarios_path = args.output_dir / f"cenarios_consumo_{args.forecast_year}.csv"
-    summary_path = args.output_dir / f"resumo_cenarios_{args.forecast_year}.csv"
-    metadata_path = args.output_dir / f"metadados_cenarios_{args.forecast_year}.json"
-    figure_path = args.figures_dir / f"gemeo_digital_cenarios_{args.forecast_year}.png"
+    scenarios = build_scenarios(
+        reference,
+        rates,
+    )
 
-    rates.to_csv(rates_path, index=False)
-    reference.to_csv(reference_path, index=False, date_format="%Y-%m-%d")
-    scenarios.to_csv(scenarios_path, index=False, date_format="%Y-%m-%d")
-    summary.to_csv(summary_path, index=False)
-    plot_scenarios(scenarios, figure_path)
+    summary = build_annual_summary(
+        scenarios
+    )
+
+    args.output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    args.figures_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    horizon_suffix = (
+        f"{args.forecast_start_year}_"
+        f"{args.forecast_end_year}"
+    )
+
+    rates_path = (
+        args.output_dir
+        / "taxas_historicas_cenarios_por_uf.csv"
+    )
+
+    reference_path = (
+        args.output_dir
+        / f"projecao_sarima_{horizon_suffix}.csv"
+    )
+
+    scenarios_path = (
+        args.output_dir
+        / f"cenarios_consumo_{horizon_suffix}.csv"
+    )
+
+    summary_path = (
+        args.output_dir
+        / f"resumo_cenarios_{horizon_suffix}.csv"
+    )
+
+    metadata_path = (
+        args.output_dir
+        / f"metadados_cenarios_{horizon_suffix}.json"
+    )
+
+    figure_path = (
+        args.figures_dir
+        / f"gemeo_digital_cenarios_{horizon_suffix}.png"
+    )
+
+    rates.to_csv(
+        rates_path,
+        index=False,
+    )
+
+    reference.to_csv(
+        reference_path,
+        index=False,
+        date_format="%Y-%m-%d",
+    )
+
+    scenarios.to_csv(
+        scenarios_path,
+        index=False,
+        date_format="%Y-%m-%d",
+    )
+
+    summary.to_csv(
+        summary_path,
+        index=False,
+    )
+
+    plot_scenarios(
+        scenarios,
+        figure_path,
+    )
 
     metadata = {
-        "ano_projecao": args.forecast_year,
-        "modelo_referencia": "SARIMA estadual reajustado até 2025",
+        "inicio_projecao": (
+            args.forecast_start_year
+        ),
+        "fim_projecao": (
+            args.forecast_end_year
+        ),
+        "meses_projetados": int(
+            (
+                args.forecast_end_year
+                - args.forecast_start_year
+                + 1
+            )
+            * 12
+        ),
+        "modelo_referencia": (
+            "SARIMA estadual reajustado "
+            "com observações até 2025"
+        ),
         "intervalo_confianca": 0.95,
         "periodo_taxas_historicas": (
-            f"{args.history_start_year}-{args.history_end_year}"
+            f"{args.history_start_year}-"
+            f"{args.history_end_year}"
         ),
         "cenarios": SCENARIO_LABELS,
-        "formula": "cenario = referencia_sarima * (1 + (percentil - mediana) / 100)",
-        "interpretacao": "Cenários contrafactuais; não representam efeitos causais.",
+        "formula": (
+            "cenario = referencia_sarima * "
+            "(1 + (percentil - mediana) / 100) "
+            "** ano_horizonte"
+        ),
+        "interpretacao": (
+            "Cenários contrafactuais de demanda; "
+            "não representam probabilidades nem "
+            "efeitos climáticos causais."
+        ),
     }
+
     metadata_path.write_text(
-        json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(
+            metadata,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
     )
 
-    print("\nCenários do gêmeo digital concluídos.")
-    print("\nTaxas históricas por UF (%):")
     print(
-        rates[["uf", "p25", "mediana", "p75"]]
+        "\nCenários do gêmeo digital concluídos."
+    )
+
+    print(
+        "\nTaxas históricas por UF (%):"
+    )
+
+    print(
+        rates[
+            ["uf", "p25", "mediana", "p75"]
+        ]
         .round(3)
         .to_string(index=False)
     )
-    print("\nResumo anual dos cenários:")
+
     print(
-        summary[[
-            "uf",
-            "cenario",
-            "consumo_cenario_mwh",
-            "diferenca_referencia_pct",
-        ]]
+        "\nResumo anual dos cenários:"
+    )
+
+    print(
+        summary[
+            [
+                "ano",
+                "uf",
+                "cenario",
+                "consumo_cenario_mwh",
+                "diferenca_referencia_pct",
+            ]
+        ]
         .round(3)
         .to_string(index=False)
     )
+
     print(
         "\nArquivos gerados:"
         f"\nTaxas: {rates_path}"
@@ -437,7 +733,6 @@ def main() -> None:
         f"\nMetadados: {metadata_path}"
         f"\nFigura: {figure_path}"
     )
-
 
 if __name__ == "__main__":
     main()

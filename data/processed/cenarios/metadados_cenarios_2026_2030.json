@@ -1,0 +1,15 @@
+{
+  "inicio_projecao": 2026,
+  "fim_projecao": 2030,
+  "meses_projetados": 60,
+  "modelo_referencia": "SARIMA estadual reajustado com observações até 2025",
+  "intervalo_confianca": 0.95,
+  "periodo_taxas_historicas": "2016-2023",
+  "cenarios": {
+    "crescimento_reduzido": "Menor demanda (P25)",
+    "tendencia_historica": "Cenário de referência",
+    "crescimento_elevado": "Maior demanda (P75)"
+  },
+  "formula": "cenario = referencia_sarima * (1 + (percentil - mediana) / 100) ** ano_horizonte",
+  "interpretacao": "Cenários contrafactuais de demanda; não representam probabilidades nem efeitos climáticos causais."
+}
