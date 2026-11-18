@@ -8,6 +8,7 @@ import streamlit as st
 import json
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon as MplPolygon
+import io
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -258,20 +259,12 @@ st.caption(
 def build_study_area_map(
     geojson_data: dict,
     selected_uf: str,
-    dark_mode: bool,
+    
 ):
-    if dark_mode:
-        background_color = "#0E1724"
-        unselected_color = "#263547"
-        study_color = "#4285D4"
-        selected_color = "#76B7FF"
-        border_color = "#A8B6C5"
-    else:
-        background_color = "#FFFFFF"
-        unselected_color = "#D6DEE8"
-        study_color = "#4F9DE8"
-        selected_color = "#123E73"
-        border_color = "#FFFFFF"
+    unselected_color = "#64748B"
+    study_color = "#60A5FA"
+    selected_color = "#FF7A45"
+    border_color = "#E2E8F0"
 
     selected_code = str(UF_IBGE_CODES[selected_uf])
 
@@ -282,10 +275,11 @@ def build_study_area_map(
 
     fig, axis = plt.subplots(
         figsize=(3.0, 3.4),
-        facecolor=background_color,
+        facecolor="none",
     )
-
-    axis.set_facecolor(background_color)
+    
+    fig.patch.set_alpha(0.0)
+    axis.set_facecolor("none")
 
     for feature in geojson_data["features"]:
         state_code = str(
@@ -377,18 +371,27 @@ with st.sidebar:
             }
         )
 
-    theme_type = st.context.theme.type
-    is_dark_mode = theme_type == "dark"
-
     map_figure = build_study_area_map(
-        geojson_data=brazil_states_geojson,
-        selected_uf=selected_uf,
-        dark_mode=is_dark_mode,
+    geojson_data=brazil_states_geojson,
+    selected_uf=selected_uf,
+)
+
+    map_buffer = io.BytesIO()
+
+    map_figure.savefig(
+        map_buffer,
+        format="png",
+        dpi=200,
+        bbox_inches="tight",
+        pad_inches=0,
+        transparent=True,
     )
 
-    st.pyplot(
-        map_figure,
-        use_container_width=True,        
+    map_buffer.seek(0)
+
+    st.image(
+        map_buffer,
+        width="stretch",
     )
 
     plt.close(map_figure)
