@@ -5,11 +5,8 @@ from pathlib import Path
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 import json
-import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon as MplPolygon
-import io
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -256,80 +253,178 @@ st.caption(
     "decisões no planejamento energético estadual."
 )
 
-def build_study_area_map(
+def build_study_area_map_svg(
     geojson_data: dict,
     selected_uf: str,
-    
-):
+) -> str:
+    width = 420
+    height = 405
+
+    longitude_min = -74.5
+    longitude_max = -32.5
+    latitude_min = -34.5
+    latitude_max = 6.0
+
     unselected_color = "#64748B"
     study_color = "#60A5FA"
     selected_color = "#FF7A45"
     border_color = "#E2E8F0"
 
-    selected_code = str(UF_IBGE_CODES[selected_uf])
-
-    study_codes = {
-        str(code)
-        for code in UF_IBGE_CODES.values()
+    code_to_uf = {
+        str(code): uf
+        for uf, code in UF_IBGE_CODES.items()
     }
 
-    fig, axis = plt.subplots(
-        figsize=(3.0, 3.4),
-        facecolor="none",
-    )
-    
-    fig.patch.set_alpha(0.0)
-    axis.set_facecolor("none")
+    def project_point(
+        longitude: float,
+        latitude: float,
+    ) -> tuple[float, float]:
+        x_coordinate = (
+            (longitude - longitude_min)
+            / (longitude_max - longitude_min)
+            * width
+        )
+
+        y_coordinate = (
+            (latitude_max - latitude)
+            / (latitude_max - latitude_min)
+            * height
+        )
+
+        return x_coordinate, y_coordinate
+
+    state_elements: list[str] = []
 
     for feature in geojson_data["features"]:
         state_code = str(
             feature["properties"]["codarea"]
         )
 
-        if state_code == selected_code:
+        state_uf = code_to_uf.get(state_code)
+
+        state_information = IBGE_STATE_NAMES.get(
+            state_code,
+            ("", state_code),
+        )
+
+        state_name = state_information[1]
+
+        if state_uf == selected_uf:
             fill_color = selected_color
-        elif state_code in study_codes:
+            stroke_width = 1.5
+        elif state_uf is not None:
             fill_color = study_color
+            stroke_width = 0.9
         else:
             fill_color = unselected_color
+            stroke_width = 0.65
 
         geometry = feature["geometry"]
-        geometry_type = geometry["type"]
         coordinates = geometry["coordinates"]
 
-        if geometry_type == "Polygon":
+        if geometry["type"] == "Polygon":
             polygons = [coordinates]
-        elif geometry_type == "MultiPolygon":
+        elif geometry["type"] == "MultiPolygon":
             polygons = coordinates
         else:
             continue
 
+        path_parts: list[str] = []
+
         for polygon in polygons:
             exterior_ring = polygon[0]
 
-            patch = MplPolygon(
-                exterior_ring,
-                closed=True,
-                facecolor=fill_color,
-                edgecolor=border_color,
-                linewidth=0.55,
+            projected_points = [
+                project_point(
+                    float(longitude),
+                    float(latitude),
+                )
+                for longitude, latitude in exterior_ring
+            ]
+
+            if not projected_points:
+                continue
+
+            first_x, first_y = projected_points[0]
+
+            commands = [
+                f"M {first_x:.2f} {first_y:.2f}"
+            ]
+
+            commands.extend(
+                f"L {x_coordinate:.2f} {y_coordinate:.2f}"
+                for x_coordinate, y_coordinate
+                in projected_points[1:]
             )
 
-            axis.add_patch(patch)
+            commands.append("Z")
+            path_parts.append(" ".join(commands))
 
-    axis.set_xlim(-74.5, -32.5)
-    axis.set_ylim(-34.5, 6.0)
-    axis.set_aspect("equal", adjustable="box")
-    axis.axis("off")
+        path_data = " ".join(path_parts)
 
-    fig.subplots_adjust(
-        left=0,
-        right=1,
-        top=1,
-        bottom=0,
-    )
+        css_class = "state-shape"
 
-    return fig
+        path_element = (
+            f'<path class="{css_class}" '
+            f'd="{path_data}" '
+            f'fill="{fill_color}" '
+            f'stroke="{border_color}" '
+            f'stroke-width="{stroke_width}">'
+            f"<title>{state_name}</title>"
+            f"</path>"
+        )
+
+        state_elements.append(path_element)
+
+    states_svg = "".join(state_elements)
+
+    return f"""
+    <div
+        class="study-map-container"
+        style="
+            width: 100%;
+            height: 270px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        "
+    >
+    
+        <svg
+            viewBox="0 0 {width} {height}"
+            width="100%"
+            height="100%"
+            style="
+                display: block;
+                overflow: visible;
+            "
+            role="img"
+            aria-label="Mapa dos estados brasileiros analisados"
+            preserveAspectRatio="xMidYMid meet"
+        >
+            <style>
+                .state-shape {{
+                    stroke-linejoin: round;
+                    transition:
+                        filter 0.15s ease,
+                        stroke-width 0.15s ease;
+                }}
+                
+            </style>
+
+            {states_svg}
+        </svg>
+    </div>
+    """
+if "selected_uf_widget" not in st.session_state:
+    st.session_state["selected_uf_widget"] = "RS"
+    
+requested_uf = st.query_params.get("uf")
+
+if requested_uf in UF_NAMES:
+    st.session_state["selected_uf_widget"] = requested_uf
+    del st.query_params["uf"]
+
 
 with st.sidebar:
     st.header("Configuração da simulação")
@@ -338,63 +433,19 @@ with st.sidebar:
         "Unidade da Federação",
         options=list(UF_NAMES),
         format_func=lambda uf: f"{UF_NAMES[uf]} ({uf})",
-        index=list(UF_NAMES).index("RS"),
+        key="selected_uf_widget",
     )
-    
-    map_rows: list[dict[str, object]] = []
-
-    selected_ibge_code = UF_IBGE_CODES[
-        selected_uf
-    ]
-
-    analyzed_codes = set(
-        UF_IBGE_CODES.values()
+        
+    map_svg = build_study_area_map_svg(
+        geojson_data=brazil_states_geojson,
+        selected_uf=selected_uf,
     )
 
-    for ibge_code, (
-        state_abbreviation,
-        state_name,
-    ) in IBGE_STATE_NAMES.items():
-        if ibge_code == selected_ibge_code:
-            highlight_level = 2
-        elif ibge_code in analyzed_codes:
-            highlight_level = 1
-        else:
-            highlight_level = 0
-
-        map_rows.append(
-            {
-                "codigo_ibge": ibge_code,
-                "uf": state_abbreviation,
-                "estado": state_name,
-                "destaque": highlight_level,
-            }
-        )
-
-    map_figure = build_study_area_map(
-    geojson_data=brazil_states_geojson,
-    selected_uf=selected_uf,
-)
-
-    map_buffer = io.BytesIO()
-
-    map_figure.savefig(
-        map_buffer,
-        format="png",
-        dpi=200,
-        bbox_inches="tight",
-        pad_inches=0,
-        transparent=True,
+    components.html(
+        map_svg,
+        height=270,
+        scrolling=False,
     )
-
-    map_buffer.seek(0)
-
-    st.image(
-        map_buffer,
-        width="stretch",
-    )
-
-    plt.close(map_figure)
 
     st.caption(
         "Estados coloridos compõem o recorte "
