@@ -1,8 +1,31 @@
-# Dados brutos do INMET
+
+# Raw INMET datasets
 data/inmet/dados_brutos/arquivos_zip/
 data/inmet/dados_brutos/estacoes_automaticas/
 
-# Ambientes virtuais e arquivos temporários do Python
+# Python virtual environments
 .venv/
+venv/
+env/
+
+# Python cache and compiled files
 __pycache__/
 *.py[cod]
+
+# Environment variables and credentials
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# IDE settings
+.vscode/
+.idea/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Temporary files and logs
+*.tmp
+*.log
